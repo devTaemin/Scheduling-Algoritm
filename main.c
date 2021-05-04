@@ -8,6 +8,7 @@ int capture_process = 0;										// Detect whether process is assigned or not.
 int capture_burst = 0;
 int pointProcess = 0;											// Pointing current process
 int index = 0;
+int compare_index = -1;											// index비교
 
 
 typedef struct Process {
@@ -17,6 +18,7 @@ typedef struct Process {
 	int p_allocated;
 	int p_finish;
 	int p_used;													// Process 사용 유무: 사용안함(-1), 사용함(1)
+	int p_remainBurst;											// SRTF, RR에 사용할 남은 bursttime저장용 변수
 }Process;
 
 typedef struct readyQueue {
@@ -48,7 +50,7 @@ int isEmpty(readyQueue* _Q) {
 		return (_Q->Priority.front == _Q->Priority.rear);
 	}
 	else if (_Q->method == 3) {
-		return (_Q->Priority.front == _Q->Priority.rear); // 임시
+		return (_Q->Priority.front == _Q->Priority.rear);
 	}
 	else {
 		return (_Q->Priority.front == _Q->Priority.rear); // 임시
@@ -63,7 +65,7 @@ int isFull(readyQueue* _Q) {
 		return (_Q->capacity == MAXSIZE);
 	}
 	else if (_Q->method == 3) {
-		return 1; //(_Q.Priority.front == _Q.Priority.rear); // 임시
+		return (_Q->capacity == MAXSIZE);
 	}
 	else {
 		return 1; // (_Q.Priority.front == _Q.Priority.rear); // 임시
@@ -84,7 +86,8 @@ void initQueue(readyQueue* _Q) {
 		_Q->Priority.rear = 0;
 	}
 	else if (_Q->method == 3) {
-		//
+		_Q->Priority.front = 0;
+		_Q->Priority.rear = 0;
 	}
 	else {
 		//
@@ -112,7 +115,13 @@ void enQueue(readyQueue* _Q, Process _P) {
 		_Q->capacity++;
 	}
 	else if (_Q->method == 3) {
-		//
+		if (isFull(_Q)) {
+			printf("d\n", "Error: FULL!");
+			return;
+		}
+		_Q->Priority.queue[_Q->Priority.rear] = _P;
+		_Q->Priority.rear++;
+		_Q->capacity++;
 	}
 	else {
 		//
@@ -142,7 +151,14 @@ Process deQueue(readyQueue* _Q) {
 		return temp;
 	}
 	else if (_Q->method == 3) {
-		//
+		if (isEmpty(_Q)) {
+			printf("d\n", "Error: EMPTY!");
+			exit(1);
+		}
+		Process temp = _Q->Priority.queue[_Q->Priority.front];
+		_Q->capacity--;
+		_Q->Priority.front++;
+		return temp;
 	}
 	else {
 		//
@@ -179,29 +195,55 @@ int pickProcess(readyQueue* _Q, int _tick) {
 	return result;
 }
 
+
+int monitProcess(readyQueue* _Q, int _tick) {
+	int burst = 1000;
+	int result = -1;
+	for (int i = 0; i < _Q->capacity; i++) {
+		if (_Q->Priority.queue[i].p_used != 1) {				// 해당 프로세스가 사용전(-1), 사용중(0), 사용후(1), 즉 사용되지 않은 것을 찾는다.
+			if (_Q->Priority.queue[i].p_arrival <= _tick) {
+				if (_Q->Priority.queue[i].p_remainBurst < burst) {
+					burst = _Q->Priority.queue[i].p_remainBurst;
+					result = i;
+				}
+				else {
+					continue;
+				}
+			}
+			else {
+				continue;
+			}
+		}
+		else {
+			continue;
+		}
+	}
+	return result;
+}
+
 void set_schedule(int method) {
 	if (method == 1) {
-		printf("Scheduling method:  FCFS: First Come First Served (Non-preemptive) \n");
+		printf("Scheduling method:  FCFS: First Come First Served (Non-preemptive) \n\n");
 		Scheduler.method = 1;
 		initQueue(&Scheduler);
 	}
 	else if (method == 2) {
-		printf("Scheduling method: SJF: Shortest Job First (Non-preemptive) \n");
+		printf("Scheduling method: SJF: Shortest Job First (Non-preemptive) \n\n");
 		Scheduler.method = 2;
 		initQueue(&Scheduler);
 	}
 	else if (method == 3) {
-		printf("Scheduling method: SRTF: Shortest Remaining Time First (Preemptive) \n");
+		printf("Scheduling method: SRTF: Shortest Remaining Time First (Preemptive) \n\n");
 		Scheduler.method = 3;
 		initQueue(&Scheduler);
 	}
 	else if (method == 4) {
-		printf("Scheduling method: RR: Round Robin (Preemptive) \n");
+		printf("Scheduling method: RR: Round Robin (Preemptive) \n\n");
 		Scheduler.method = 4;
 		initQueue(&Scheduler);
 	}
 	else {
-		printf("Error: Method number is incorrect!");
+		printf("Error: Method number is incorrect!\n");
 		Scheduler.method = -1;
 		exit(1);
 	}
@@ -232,6 +274,7 @@ void read_proc_list(const char* filename) {
 		p_element.p_allocated = -1;
 		p_element.p_finish = -1;
 		p_element.p_used = -1;
+		p_element.p_remainBurst = p_burst;
 
 		enQueue(&Scheduler, p_element);                          // 여기 &안해서 오류날수도!!
 		//printf("%d %d %d\n", p_id, p_arrival, p_burst);
@@ -384,7 +427,72 @@ int do_schedule(int tick)
 		}
 	}
 	else if (Scheduler.method == 3) {					//SRTF
-		return 1; //임시
+		int dispatch = 0;															// dispatch 아니면(0), 맞으면(1)
+		for (int i = 0; i < numProcess; i++) {
+			if (Scheduler.Priority.queue[i].p_arrival == tick) {
+				printf("[tick: %d] New Process (ID: %d) newly joins to ready queue\n", tick, Scheduler.Priority.queue[i].p_id);
+			}
+		}
+
+		if (pointProcess < numProcess) {												// 스케줄러에 프로세스가 남아있다
+			index = monitProcess(&Scheduler, tick);										// 적합한 프로세스를 찾는다.
+			if (compare_index == -1) {													// 비교 index가 초기화가 되어있는 상태
+				compare_index = index;
+			}
+			else {																		// 비교 index가 할당되어있는 상태
+				if (compare_index == index) {											// 프로세스가 바뀌지 않았다.
+					dispatch = 0;
+				}
+				else {																	// 프로세스가 바뀌었다.
+					dispatch = 1;
+					compare_index = index;												// 바뀌었으면 그다음 비교를 위해 가져가기
+				}
+			}
+
+			if (index != -1) {															// 적합한 프로세스를 찾은 경우
+				temp = Scheduler.Priority.queue[index];
+				if (temp.p_used == -1) {												// 처음 선택된 프로세스의 경우
+					Scheduler.Priority.queue[index].p_used = 0;							// 사용이 시작되었음을 표시
+					Scheduler.Priority.queue[index].p_allocated = tick;					// 할당된 시간을 표시
+					Scheduler.Priority.queue[index].p_remainBurst--;					// 남은 burst시간을 줄여주기
+					printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);// dispatch
+					if (Scheduler.Priority.queue[index].p_remainBurst > 0) {			// 남은 burst시간이 있으면
+						return 1;
+					}
+					else {																// 남은 burst시간이 없으면
+						Scheduler.Priority.queue[index].p_used = 1;						// 해당 프로세스가 다 사용되었음을 표시
+						Scheduler.Priority.queue[index].p_finish = tick + 1;				// 종료된 시간 할당
+						pointProcess++;													// 사용된 프로세스 개수 증가
+						return 1;
+					}
+				}
+				else {																	// 이전에도 사용된 프로세스의 경우
+					if (dispatch == 1) {
+						printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);// dispatch
+					}
+					Scheduler.Priority.queue[index].p_remainBurst--;
+					if (Scheduler.Priority.queue[index].p_remainBurst > 0) {			// 남은 burst시간이 있으면
+						return 1;
+					}
+					else {																// 남은 burst시간이 없으면
+						Scheduler.Priority.queue[index].p_used = 1;						// 해당 프로세스가 다 사용되었음을 표시
+						Scheduler.Priority.queue[index].p_finish = tick + 1;				// 종료된 시간 할당
+						pointProcess++;													// 사용된 프로세스 개수 증가
+						return 1;
+					}
+				}
+			}
+			else {																		// 적합한 프로세스를 찾지 못한 경우
+				return 1;
+			}
+		}
+		else {																			// 스케줄러에 프로세스를 다 썼다
+			printf("[tick: %d] All processes are terminated.\n", tick);
+			return 0;
+		}
+
+
+
 	}
 	else {												//RR
 		return 1; //임시
@@ -405,7 +513,7 @@ void print_performance()
 	double totalTAT = 0;
 	double totalWT = 0;
 	double totalRT = 0;
-	printf("%s\n", "=================================================================================================================");
+	printf("\n%s\n", "=================================================================================================================");
 	printf("%10s  %10s  %10s  %10s  %20s  %18s  %18s\n", "PID", "arrival", "finish", "burst", "Turn around Time", "Wating time", "Response time");
 	printf("%s\n", "=================================================================================================================");
 	for (int j = 0; j < numProcess; j++) {
