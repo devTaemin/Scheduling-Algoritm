@@ -7,7 +7,7 @@ int tick = 0;
 int capture_process = 0;										// Detect whether process is assigned or not.
 int capture_burst = 0;
 int pointProcess = 0;											// Pointing current process
-
+int index = 0;
 
 
 typedef struct Process {
@@ -16,12 +16,13 @@ typedef struct Process {
 	int p_burst;
 	int p_allocated;
 	int p_finish;
+	int p_used;													// Process 사용 유무: 사용안함(-1), 사용함(1)
 }Process;
 
 typedef struct readyQueue {
 	int method;
 	int capacity;
-	
+
 	struct NormalType {
 		struct Process queue[MAXSIZE];
 		int front, rear;
@@ -35,17 +36,16 @@ typedef struct readyQueue {
 	struct PriorityType {
 		struct Process queue[MAXSIZE];
 		int front, rear;
-		int prior;
 	}Priority;
 }readyQueue;
 
 
 int isEmpty(readyQueue* _Q) {
 	if (_Q->method == 1) {
-		return (_Q->Normal.front == _Q->Normal.rear);    // 임시
+		return (_Q->Normal.front == _Q->Normal.rear);
 	}
 	else if (_Q->method == 2) {
-		return (_Q->Circular.front == _Q->Circular.rear); // 임시
+		return (_Q->Priority.front == _Q->Priority.rear);
 	}
 	else if (_Q->method == 3) {
 		return (_Q->Priority.front == _Q->Priority.rear); // 임시
@@ -57,10 +57,10 @@ int isEmpty(readyQueue* _Q) {
 
 int isFull(readyQueue* _Q) {
 	if (_Q->method == 1) {
-		return (_Q->capacity == MAXSIZE);    // 임시
+		return (_Q->capacity == MAXSIZE);
 	}
 	else if (_Q->method == 2) {
-		return 1; //(_Q.Circular.front == _Q.Circular.rear); // 임시
+		return (_Q->capacity == MAXSIZE);
 	}
 	else if (_Q->method == 3) {
 		return 1; //(_Q.Priority.front == _Q.Priority.rear); // 임시
@@ -73,14 +73,15 @@ int isFull(readyQueue* _Q) {
 
 void initQueue(readyQueue* _Q) {
 	capture_process = 0;										// Initialize global variable (capture_process): FALSE.
-	_Q->capacity = 0;										
+	_Q->capacity = 0;
 
 	if (_Q->method == 1) {
 		_Q->Normal.front = 0;
-		_Q->Normal.front = 0;
+		_Q->Normal.rear = 0;
 	}
 	else if (_Q->method == 2) {
-		//
+		_Q->Priority.front = 0;
+		_Q->Priority.rear = 0;
 	}
 	else if (_Q->method == 3) {
 		//
@@ -102,7 +103,13 @@ void enQueue(readyQueue* _Q, Process _P) {
 		_Q->capacity++;
 	}
 	else if (_Q->method == 2) {
-		//
+		if (isFull(_Q)) {
+			printf("d\n", "Error: FULL!");
+			return;
+		}
+		_Q->Priority.queue[_Q->Priority.rear] = _P;
+		_Q->Priority.rear++;
+		_Q->capacity++;
 	}
 	else if (_Q->method == 3) {
 		//
@@ -125,7 +132,14 @@ Process deQueue(readyQueue* _Q) {
 		return temp;
 	}
 	else if (_Q->method == 2) {
-		//
+		if (isEmpty(_Q)) {
+			printf("d\n", "Error: EMPTY!");
+			exit(1);
+		}
+		Process temp = _Q->Priority.queue[_Q->Priority.front];
+		_Q->capacity--;
+		_Q->Priority.front++;
+		return temp;
 	}
 	else if (_Q->method == 3) {
 		//
@@ -139,6 +153,31 @@ Process deQueue(readyQueue* _Q) {
 struct readyQueue Scheduler;									// Main Scheduler
 Process temp;													// Variable for contiaining process in ready queue.
 
+int pickProcess(readyQueue* _Q, int _tick) {
+	int burst = 1000;
+	int result = -1;
+	for (int i = 0; i < _Q->capacity; i++) {
+		if (_Q->Priority.queue[i].p_used == -1) {				// 선택한 프로세스가 사용되지 않은것인 경우
+			//if ((_Q->Priority.queue[i].p_arrival <= _tick) && (_Q->Priority.queue[i].p_burst <= burst))
+			if (_Q->Priority.queue[i].p_arrival <= _tick) {
+				if (_Q->Priority.queue[i].p_burst < burst) {
+					burst = _Q->Priority.queue[i].p_burst;
+					result = i;
+				}
+				else {
+					continue;
+				}
+			}
+			else {
+				continue;
+			}
+		}
+		else {													// 선택한 프로세스가 이미 사용된 경우
+			continue;
+		}
+	}
+	return result;
+}
 
 void set_schedule(int method) {
 	if (method == 1) {
@@ -177,13 +216,13 @@ void read_proc_list(const char* filename) {
 	Process p_element;											// The process for containing information.
 
 	FILE* file = fopen(filename, "r");							// Open file
-	if (file == NULL)											
+	if (file == NULL)
 	{
 		printf("%s\n", "ERROR: Failed to read file");
 		exit(1);
 	}
-	fscanf(file, "%d", &count);									
-	printf("%d\n", count);
+	fscanf(file, "%d", &count);
+	//printf("%d\n", count);									// count 출력 확인용
 	for (int i = 0; i < count; i++) {
 		fscanf(file, "%d %d %d", &p_id, &p_arrival, &p_burst);
 
@@ -192,6 +231,7 @@ void read_proc_list(const char* filename) {
 		p_element.p_burst = p_burst;
 		p_element.p_allocated = -1;
 		p_element.p_finish = -1;
+		p_element.p_used = -1;
 
 		enQueue(&Scheduler, p_element);                          // 여기 &안해서 오류날수도!!
 		//printf("%d %d %d\n", p_id, p_arrival, p_burst);
@@ -214,9 +254,9 @@ int do_schedule(int tick)
 /*
 	tick은 전역변수로 0부터 시작
 	스케줄러 time은 tick과 같이 흘러가지
-	tick 0이다. 
+	tick 0이다.
 	if p1의 arrival time이 0이다.
-	
+
 	tick 1이다
 	if p1의 arrival time이 tick보다 작고, burst time이 남았다 -> burst time을 1씩 감소
 	burst time이 0이되면 dequeue한다
@@ -227,14 +267,8 @@ int do_schedule(int tick)
 
 */
 {
-	
-
-	//printf("[tick: %d] New Process (ID: %d) newly joins to ready queue", tick, temp.p_id);
-	//printf("[tick: %d] Dispatch to Process (ID: %d)", tick, temp.p_id);
-	//printf("[tick: %d] All processes are terminated.", tick);
-
 	int numProcess = Scheduler.capacity;				// the number of process in ready queue.
-	
+
 
 	if (Scheduler.method == 1) {
 		// 스케줄러에 저장된 큐의 arrival time을 tick과 비교하여 확인하자
@@ -294,7 +328,60 @@ int do_schedule(int tick)
 		}
 	}
 	else if (Scheduler.method == 2) {					//SJF
-		return 1; //임시
+		for (int i = 0; i < numProcess; i++) {
+			if (Scheduler.Priority.queue[i].p_arrival == tick) {
+				printf("[tick: %d] New Process (ID: %d) newly joins to ready queue\n", tick, Scheduler.Priority.queue[i].p_id);
+			}
+		}
+
+		if (capture_process == 0) {
+			if (pointProcess < numProcess) {									// pointProcess로 스케줄러 프로세스 사용 개수 체크
+				index = pickProcess(&Scheduler, tick);						// 적합한 프로세스를 찾기
+				if (index != -1) {												// 적합한 프로세스를 찾은 경우
+					temp = Scheduler.Priority.queue[index];
+					capture_process = 1;
+					Scheduler.Priority.queue[index].p_allocated = tick;
+					capture_burst = temp.p_burst;
+					printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);
+				}
+				else {															// 적합한 프로세스를 찾지 못한 경우
+					return 1;													// 시간을 보낸다.
+				}
+			}
+			else {																// 스케줄러 프로세스 다 썼다.
+				printf("[tick: %d] All processes are terminated.\n", tick);
+				return 0;														// res를 0으로 만들면서 종료.
+			}
+		}
+		else {
+			capture_burst--;
+			if (capture_burst > 0) {
+				return 1;
+			}
+			else {
+				Scheduler.Priority.queue[index].p_finish = tick;
+				Scheduler.Priority.queue[index].p_used = 1;						// 해당 프로세스를 다 사용했다는 것을 표시
+				pointProcess++;													// 사용한 프로세스의 개수를 표시
+				capture_process = 0;
+				if (pointProcess < numProcess) {								// 모든 프로세스를 다 사용하지 않은 경우
+					index = pickProcess(&Scheduler, tick);						// 적합한 프로세스를 찾기
+					if (index != -1) {												// 적합한 프로세스를 찾은 경우
+						temp = Scheduler.Priority.queue[index];
+						capture_process = 1;
+						Scheduler.Priority.queue[index].p_allocated = tick;
+						capture_burst = temp.p_burst;
+						printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);
+					}
+					else {															// 적합한 프로세스를 찾지 못한 경우
+						return 1;													// 시간을 보낸다.
+					}
+				}
+				else {															// 모든 프로세스를 다 사용한 경우
+					printf("[tick: %d] All processes are terminated.\n", tick);
+					return 0;														// res를 0으로 만들면서 종료.
+				}
+			}
+		}
 	}
 	else if (Scheduler.method == 3) {					//SRTF
 		return 1; //임시
@@ -322,7 +409,19 @@ void print_performance()
 	printf("%10s  %10s  %10s  %10s  %20s  %18s  %18s\n", "PID", "arrival", "finish", "burst", "Turn around Time", "Wating time", "Response time");
 	printf("%s\n", "=================================================================================================================");
 	for (int j = 0; j < numProcess; j++) {
-		Process print = Scheduler.Normal.queue[j];
+		Process print;
+		if (Scheduler.method == 1) {
+			print = Scheduler.Normal.queue[j];
+		}
+		else if (Scheduler.method == 2) {
+			print = Scheduler.Priority.queue[j];
+		}
+		else if (Scheduler.method == 3) {
+			print = Scheduler.Priority.queue[j];
+		}
+		else {
+			print = Scheduler.Priority.queue[j];
+		}
 		int TAT = print.p_finish - print.p_arrival;
 		int WT = print.p_finish - print.p_arrival - print.p_burst;
 		int RT = print.p_allocated - print.p_arrival;
@@ -332,7 +431,7 @@ void print_performance()
 		printf("%10d  %10d  %10d  %10d  %20d  %18d  %18d\n", print.p_id, print.p_arrival, print.p_finish, print.p_burst, TAT, WT, RT);
 	}
 	printf("%s\n", "-----------------------------------------------------------------------------------------------------------------");
-	printf("%10s  %30s  %20f %18f %18f\n", "Average", " ", totalTAT/numProcess, totalWT/numProcess, totalRT/numProcess);
+	printf("%10s  %30s  %20f %18f %18f\n", "Average", " ", totalTAT / numProcess, totalWT / numProcess, totalRT / numProcess);
 	printf("%s\n", "=================================================================================================================");
 
 }
@@ -361,22 +460,22 @@ int main(int argc, char* argv[])
 	read_proc_list(file_name);
 
 
-	while(1){
+	while (1) {
 		int res = do_schedule(tick);
 		if (res == 0 || tick > 100) break;
 		tick++;
 	}
 	// 최종 확인용!! 지워야함!
 	// 아이디 도착시간 실행시간 할당시간 종료시간
-	/*
+
 	for (int j = 0; j < 4; j++) {
-		Process print = Scheduler.Normal.queue[j];
-		printf("%d %d %d %d %d\n", print.p_id, print.p_arrival, print.p_burst, print.p_allocated, print.p_finish);
+		Process print = Scheduler.Priority.queue[j];
+		printf("%d %d %d %d %d %d\n", print.p_id, print.p_arrival, print.p_burst, print.p_allocated, print.p_finish, print.p_used);
 	}
-	*/
+
 
 
 	print_performance();
-	
+
 	return 0;
 }
