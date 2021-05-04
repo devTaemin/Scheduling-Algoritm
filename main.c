@@ -9,7 +9,10 @@ int capture_burst = 0;
 int pointProcess = 0;											// Pointing current process
 int index = 0;
 int compare_index = -1;											// index비교
-
+int sequence_holder = 0;										// RR, readyQueue에서 프로세스의 순서
+int readyProcess = 0;											// RR, readyQueue에서 기다리는 프로세스 개수
+int timeQuantum = 2;											// RR, timeQuantum value
+int RR = 0;														// RR, timeQuantum switch
 
 typedef struct Process {
 	int p_id;
@@ -19,6 +22,7 @@ typedef struct Process {
 	int p_finish;
 	int p_used;													// Process 사용 유무: 사용안함(-1), 사용함(1)
 	int p_remainBurst;											// SRTF, RR에 사용할 남은 bursttime저장용 변수
+	int p_sequence;												// RR에 사용할 순서 할당 변수
 }Process;
 
 typedef struct readyQueue {
@@ -53,7 +57,7 @@ int isEmpty(readyQueue* _Q) {
 		return (_Q->Priority.front == _Q->Priority.rear);
 	}
 	else {
-		return (_Q->Priority.front == _Q->Priority.rear); // 임시
+		return (_Q->Circular.front == _Q->Circular.rear);
 	}
 }
 
@@ -68,7 +72,7 @@ int isFull(readyQueue* _Q) {
 		return (_Q->capacity == MAXSIZE);
 	}
 	else {
-		return 1; // (_Q.Priority.front == _Q.Priority.rear); // 임시
+		return (_Q->capacity == MAXSIZE);
 	}
 }
 
@@ -90,7 +94,8 @@ void initQueue(readyQueue* _Q) {
 		_Q->Priority.rear = 0;
 	}
 	else {
-		//
+		_Q->Circular.front = 0;
+		_Q->Circular.rear = 0;
 	}
 }
 
@@ -124,7 +129,13 @@ void enQueue(readyQueue* _Q, Process _P) {
 		_Q->capacity++;
 	}
 	else {
-		//
+		if (isFull(_Q)) {
+			printf("d\n", "Error: FULL!");
+			return;
+		}
+		_Q->Circular.queue[_Q->Circular.rear] = _P;
+		_Q->Circular.rear++;
+		_Q->capacity++;
 	}
 }
 
@@ -161,7 +172,14 @@ Process deQueue(readyQueue* _Q) {
 		return temp;
 	}
 	else {
-		//
+		if (isEmpty(_Q)) {
+			printf("d\n", "Error: EMPTY!");
+			exit(1);
+		}
+		Process temp = _Q->Circular.queue[_Q->Circular.front];
+		_Q->capacity--;
+		_Q->Circular.front++;
+		return temp;
 	}
 }
 
@@ -221,6 +239,22 @@ int monitProcess(readyQueue* _Q, int _tick) {
 	return result;
 }
 
+
+void rotateProcess(readyQueue* _Q, int _tick) {				// sequence holder을 사용해서 sequence가 -1인 것에 readyqueue에 들어온 프로세스에 순서 부여 (arrive안에 들어온 것들), 그 이후는 안에서 자동으로 부여 될 것이다.
+
+	for (int i = 0; i < _Q->capacity; i++) {				// 전체 프로세스 검사
+		if (_Q->Circular.queue[i].p_used == -1) {			// 해당 프로세스가 사용되지 않은 프로세스 인 경우
+			if (_Q->Circular.queue[i].p_arrival <= _tick) {	// 해당 프로세스이 도착한 경우
+				_Q->Circular.queue[i].p_sequence = sequence_holder;	// 대기열 순서를 부여
+				sequence_holder++;							// 다음 순서 대기
+				_Q->Circular.queue[i].p_used = 0;			// 해당 프로세스가 사용 중, 사용이 시작되었음을 표시
+				readyProcess++;								// 준비가 되어있는 프로세스의 개수
+			}
+		}
+	}
+}
+
+
 void set_schedule(int method) {
 	if (method == 1) {
 		printf("Scheduling method:  FCFS: First Come First Served (Non-preemptive) \n\n");
@@ -249,6 +283,7 @@ void set_schedule(int method) {
 	}
 }
 
+
 void read_proc_list(const char* filename) {
 
 	int count;													// The number of process in text file.
@@ -275,6 +310,7 @@ void read_proc_list(const char* filename) {
 		p_element.p_finish = -1;
 		p_element.p_used = -1;
 		p_element.p_remainBurst = p_burst;
+		p_element.p_sequence = -1;
 
 		enQueue(&Scheduler, p_element);                          // 여기 &안해서 오류날수도!!
 		//printf("%d %d %d\n", p_id, p_arrival, p_burst);
@@ -494,8 +530,155 @@ int do_schedule(int tick)
 
 
 	}
-	else {												//RR
-		return 1; //임시
+	else {																				//RR
+		int tempSequence = 99999999999999;												//순서 비교용 변수
+		for (int i = 0; i < numProcess; i++) {
+			if (Scheduler.Circular.queue[i].p_arrival == tick) {
+				printf("[tick: %d] New Process (ID: %d) newly joins to ready queue\n", tick, Scheduler.Circular.queue[i].p_id);
+			}
+		}
+
+		if (pointProcess < numProcess) {	// readyProcess(출력대기) sequence_holder(대기프로세스의 순서) pointProcess(남은 프로세스)
+			rotateProcess(&Scheduler, tick);	//readyProcess, sequence_holder 업데이트
+			if (readyProcess > 0) {			// 출력 대기인 프로세스가 있는 경우 (p_used: -1 -> 0), 한번썼던것 (p_used: 0 -> 1), 다쓴것 (p_used: 1->2)
+				// p_used(-1:대기에도 올라오지 않음) (0:사용대기) (1:사용경험있음) (2:사용종료)
+				// RR변수랑 timequantum이용하자
+
+				if (RR == 0) {																// 현재 돌아가고 있는 프로세스가 없는 경우
+					for (int j = 0; j < numProcess; j++) {									// 출력 대기인 프로세스 중에서 sequence가 가장 작은것을 선택
+						if ((Scheduler.Circular.queue[j].p_used == 0) || (Scheduler.Circular.queue[j].p_used == 1)) {				// 처음 사용, 이전 사용 혼재
+							if (Scheduler.Circular.queue[j].p_sequence < tempSequence) {
+								tempSequence = Scheduler.Circular.queue[j].p_sequence;
+								index = j;													// 가장 앞에 있는 프로세스의 index 저장
+							}
+						}
+					}
+					temp = Scheduler.Circular.queue[index];
+					if (Scheduler.Circular.queue[index].p_used == 0) {								// 선택된 프로세스가 처음 이면
+						Scheduler.Circular.queue[index].p_used = 1;
+						Scheduler.Circular.queue[index].p_allocated = tick;
+						Scheduler.Circular.queue[index].p_remainBurst--;
+						timeQuantum--;																// timeQuantum 줄이기
+						RR = 1;																		// 현재 할당된 프로세스가 있음을 표시
+						printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);			// dispatch
+
+						if (timeQuantum > 0) {
+							if (Scheduler.Circular.queue[index].p_remainBurst > 0) {
+								return 1;
+							}
+							else {
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_used = 2;
+								Scheduler.Circular.queue[index].p_finish = tick + 1;
+								pointProcess++;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+						}
+						else {
+							if (Scheduler.Circular.queue[index].p_remainBurst > 0) {
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+							else {
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_used = 2;
+								Scheduler.Circular.queue[index].p_finish = tick + 1;
+								pointProcess++;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+						}
+					}
+					else {																			// 선택된 프로세스가 처음이 아니면
+						Scheduler.Circular.queue[index].p_remainBurst--;
+						timeQuantum--;
+						RR = 1;
+						printf("[tick: %d] Dispatch to Process (ID: %d)\n", tick, temp.p_id);			// dispatch
+
+						if (timeQuantum > 0) {														// timeQuantum이 남은 경우
+							if (Scheduler.Circular.queue[index].p_remainBurst > 0) {											// 프로세스의 remainburst가 남은 경우
+								return 1;
+							}
+							else {																	// 프로세스의 remainburst를 다 쓴 경우
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_used = 2;
+								Scheduler.Circular.queue[index].p_finish = tick + 1;
+								pointProcess++;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+						}
+						else {																		// timeQuantum을 다 쓴 경우
+							if (Scheduler.Circular.queue[index].p_remainBurst > 0) {											// 프로세스의 remainburst가 남은 경우
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+							else {																	// 프로세스의 remainburst를 다 쓴 경우
+								timeQuantum = 2;
+								RR = 0;
+								Scheduler.Circular.queue[index].p_used = 2;
+								Scheduler.Circular.queue[index].p_finish = tick + 1;
+								pointProcess++;
+								Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+								return 1;
+							}
+						}
+					}
+				}
+				else {																				// 현재 돌아가고 있는 프로세스가 있는 경우
+					Scheduler.Circular.queue[index].p_remainBurst--;
+					timeQuantum--;
+					RR = 1;
+
+					if (timeQuantum > 0) {														// timeQuantum이 남은 경우
+						if (Scheduler.Circular.queue[index].p_remainBurst > 0) {											// 프로세스의 remainburst가 남은 경우
+							return 1;
+						}
+						else {																	// 프로세스의 remainburst를 다 쓴 경우
+							timeQuantum = 2;
+							RR = 0;
+							Scheduler.Circular.queue[index].p_used = 2;
+							Scheduler.Circular.queue[index].p_finish = tick + 1;
+							pointProcess++;
+							Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+							return 1;
+						}
+					}
+					else {																		// timeQuantum을 다 쓴 경우
+						if (Scheduler.Circular.queue[index].p_remainBurst > 0) {											// 프로세스의 remainburst가 남은 경우
+							timeQuantum = 2;
+							RR = 0;
+							Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+							return 1;
+						}
+						else {																	// 프로세스의 remainburst를 다 쓴 경우
+							timeQuantum = 2;
+							RR = 0;
+							Scheduler.Circular.queue[index].p_used = 2;
+							Scheduler.Circular.queue[index].p_finish = tick + 1;
+							pointProcess++;
+							Scheduler.Circular.queue[index].p_sequence = sequence_holder++;
+							return 1;
+						}
+					}
+				}
+			}
+			else {																					// 출력 대기인 프로세스가 없는 경우
+				return 1;
+			}
+		}
+		else {
+			printf("[tick: %d] All processes are terminated.\n", tick);
+			return 0;
+		}
 	}
 }
 
@@ -528,7 +711,7 @@ void print_performance()
 			print = Scheduler.Priority.queue[j];
 		}
 		else {
-			print = Scheduler.Priority.queue[j];
+			print = Scheduler.Circular.queue[j];
 		}
 		int TAT = print.p_finish - print.p_arrival;
 		int WT = print.p_finish - print.p_arrival - print.p_burst;
@@ -576,8 +759,8 @@ int main(int argc, char* argv[])
 	// 최종 확인용!! 지워야함!
 	// 아이디 도착시간 실행시간 할당시간 종료시간
 
-	for (int j = 0; j < 4; j++) {
-		Process print = Scheduler.Priority.queue[j];
+	for (int j = 0; j < 5; j++) {
+		Process print = Scheduler.Circular.queue[j];
 		printf("%d %d %d %d %d %d\n", print.p_id, print.p_arrival, print.p_burst, print.p_allocated, print.p_finish, print.p_used);
 	}
 
