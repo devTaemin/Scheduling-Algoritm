@@ -38,7 +38,7 @@
 
 <br>
 
-###  📌 Development stack
+###  ⚙️ Development stack
 -----------------
 + Language : C
 
